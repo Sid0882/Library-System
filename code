@@ -1,0 +1,167 @@
+import sqlite3
+from datetime import datetime, timedelta
+import csv
+import matplotlib.pyplot as plt
+
+# Connect to SQLite DB
+conn = sqlite3.connect("library.db")
+cursor = conn.cursor()
+
+# Initialize DB tables
+def init_db():
+    cursor.execute('''CREATE TABLE IF NOT EXISTS books (  
+                        book_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title TEXT,
+                        author TEXT,
+                        total_copies INTEGER,
+                        available_copies INTEGER)''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS borrowers (
+                        borrower_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT)''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS transactions (
+                        transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        book_id INTEGER,
+                        borrower_id INTEGER,
+                        issue_date TEXT,
+                        return_date TEXT,
+                        returned_on TEXT)''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS logs (
+                        log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        action TEXT,
+                        timestamp TEXT)''')
+    conn.commit()
+
+def log_action(action):  # Log actions to the database
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("INSERT INTO logs (action, timestamp) VALUES (?, ?)", (action, timestamp))  # Log the action
+    conn.commit()
+
+def add_book(title, author, copies):  # Function to add a new book
+    cursor.execute("INSERT INTO books (title, author, total_copies, available_copies) VALUES (?, ?, ?, ?)",
+                   (title, author, copies, copies))
+    conn.commit()
+    log_action(f"Added book: {title}")
+
+def view_books(): # Function to view all books
+    cursor.execute("SELECT * FROM books")
+    for row in cursor.fetchall():
+        print(row)
+
+def add_borrower(name):  # Function to add a new borrower
+    cursor.execute("INSERT INTO borrowers (name) VALUES (?)", (name,))
+    conn.commit()
+    log_action(f"Added borrower: {name}")
+
+def issue_book(book_id, borrower_id):  # Function to issue a book to a borrower
+    cursor.execute("SELECT available_copies FROM books WHERE book_id=?", (book_id,))
+    book = cursor.fetchone()
+    if book and book[0] > 0:
+        issue_date = datetime.now().strftime("%Y-%m-%d")
+        return_date = (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d")
+        cursor.execute("INSERT INTO transactions (book_id, borrower_id, issue_date, return_date, returned_on) VALUES (?, ?, ?, ?, NULL)",
+                       (book_id, borrower_id, issue_date, return_date))
+        cursor.execute("UPDATE books SET available_copies = available_copies - 1 WHERE book_id=?", (book_id,))
+        conn.commit()
+        log_action(f"Issued book {book_id} to borrower {borrower_id}")
+    else:
+        print("Book not available.")
+
+def return_book(transaction_id):  # Function to return a book
+    returned_on = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("SELECT book_id, return_date FROM transactions WHERE transaction_id=?", (transaction_id,))
+    transaction = cursor.fetchone()
+    if transaction:
+        book_id, return_date = transaction
+        cursor.execute("UPDATE transactions SET returned_on=? WHERE transaction_id=?", (returned_on, transaction_id))
+        cursor.execute("UPDATE books SET available_copies = available_copies + 1 WHERE book_id=?", (book_id,))
+        conn.commit()
+        log_action(f"Returned book {book_id} for transaction {transaction_id}")
+        # Fine Calculation
+        return_due = datetime.strptime(return_date, "%Y-%m-%d")
+        returned_actual = datetime.strptime(returned_on, "%Y-%m-%d")
+        if returned_actual > return_due:  # If returned after due date
+            delta = (returned_actual - return_due).days  # Calculate late days
+            fine = delta * 5  # ₹5 per day fine
+            print(f"Late return! Fine: ₹{fine}")
+        else:
+            print("Book returned on time.")
+    else:
+        print("Transaction not found.")
+
+def most_borrowed_books_chart():  # Function to show most borrowed books chart
+    cursor.execute('''
+        SELECT b.title, COUNT(t.book_id) as borrow_count
+        FROM transactions t
+        JOIN books b ON t.book_id = b.book_id
+        GROUP BY t.book_id
+        ORDER BY borrow_count DESC
+        LIMIT 5
+    ''')
+    data = cursor.fetchall()  # Fetch top 5 most borrowed books
+    if data:
+        titles, counts = zip(*data)  
+        plt.barh(titles, counts, color='skyblue')  
+        plt.xlabel("Times Borrowed")
+        plt.title("Top 5 Most Borrowed Books")
+        plt.gca().invert_yaxis()  # Invert y-axis for better readability
+        plt.tight_layout()  
+        plt.show()
+    else:
+        print("No borrowing data available.")
+
+def export_logs():  # Function to export logs to CSV
+    cursor.execute("SELECT * FROM logs")  # Fetch all logs
+    rows = cursor.fetchall()  
+    with open("library_logs.csv", "w", newline="") as f: # Export logs to CSV
+        writer = csv.writer(f)  
+        writer.writerow(["Log ID", "Action", "Timestamp"])  
+        writer.writerows(rows)
+    print("Logs exported to library_logs.csv")
+
+# Example Menu
+def main():
+    init_db()
+    while True:
+        print("\n--- Library Management System ---")
+        print("1. Add Book")
+        print("2. View Books")
+        print("3. Add Borrower")
+        print("4. Issue Book")
+        print("5. Return Book")
+        print("6. Show Most Borrowed Books Chart")
+        print("7. Export Logs")
+        print("0. Exit")
+
+        choice = input("Enter choice: ")
+        if choice == '1':
+            title = input("Title: ")
+            author = input("Author: ")
+            copies = int(input("Copies: "))
+            add_book(title, author, copies)
+        elif choice == '2':
+            view_books()
+        elif choice == '3':
+            name = input("Borrower Name: ")
+            add_borrower(name)
+        elif choice == '4':
+            book_id = int(input("Book ID: "))
+            borrower_id = int(input("Borrower ID: "))
+            issue_book(book_id, borrower_id)
+        elif choice == '5':
+            transaction_id = int(input("Transaction ID: "))
+            return_book(transaction_id)
+        elif choice == '6':
+            most_borrowed_books_chart()
+        elif choice == '7':
+            export_logs()
+        elif choice == '0':
+            print("Thankyou!")
+            break
+        else:
+            print("Invalid choice.")
+
+if __name__ == "__main__":
+    main()
